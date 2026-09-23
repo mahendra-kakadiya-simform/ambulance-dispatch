@@ -1,5 +1,11 @@
-import { Typography } from '@mui/material';
+import { Stack, Typography } from '@mui/material';
+import { PositionReporter } from './PositionReporter';
 
 export function DriverPage() {
-  return <Typography variant="h5">My Route</Typography>;
+  return (
+    <Stack spacing={2}>
+      <Typography variant="h5">My Route</Typography>
+      <PositionReporter />
+    </Stack>
+  );
 }

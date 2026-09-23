@@ -25,7 +25,9 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Users', path: '/admin/users', roles: [Role.SUPER_ADMIN] },
+  { label: 'Vehicles', path: '/admin/vehicles', roles: [Role.SUPER_ADMIN] },
   { label: 'Requests', path: '/dispatch/requests', roles: [Role.DISPATCHER] },
+  { label: 'Live positions', path: '/dispatch/positions', roles: [Role.DISPATCHER, Role.SUPER_ADMIN] },
   { label: 'My Route', path: '/driver', roles: [Role.DRIVER] },
 ];
 

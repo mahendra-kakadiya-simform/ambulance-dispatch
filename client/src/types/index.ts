@@ -64,6 +64,25 @@ export interface Vehicle {
   code: string;
   status: VehicleStatus;
   driverId: string | null;
+  driver: { id: string; name: string } | null;
+}
+
+// One row of GET /api/vehicles/positions — a vehicle's current position only.
+export interface LivePosition {
+  vehicleId: string;
+  code: string;
+  status: VehicleStatus;
+  driverName: string | null;
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
+}
+
+export interface VehiclePosition {
+  vehicleId: string;
+  latitude: number;
+  longitude: number;
+  recordedAt: string;
 }
 
 export interface Request {
@@ -73,11 +92,35 @@ export interface Request {
   latitude: number;
   longitude: number;
   urgency: Urgency;
+  description: string | null;
   state: RequestState;
   version: number;
   createdById: string;
   createdAt: string;
   updatedAt: string;
+  activeAssignment: ActiveAssignment | null;
+}
+
+// Returned by POST /api/requests/:id/assign — the decision plus the reasoning behind it.
+export interface AssignmentCandidate {
+  vehicleId: string;
+  code: string;
+  distanceKm: number;
+  chosen: boolean;
+  // Set when this vehicle was passed over because a more urgent waiting request claims it.
+  heldFor: { requestId: string; patientName: string; urgency: Urgency } | null;
+}
+
+export interface AssignResult {
+  assignment: { id: string; vehicle: { id: string; code: string }; distanceKm: number };
+  request: Request;
+  candidates: AssignmentCandidate[];
+}
+
+export interface ActiveAssignment {
+  id: string;
+  createdAt: string;
+  vehicle: { id: string; code: string; status: VehicleStatus };
 }
 
 export interface AuditEvent {

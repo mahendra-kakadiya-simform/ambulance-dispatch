@@ -24,8 +24,8 @@ Server (run from `server/`):
 npm run dev        # tsx watch src/server.ts (port from .env, default 4000)
 npm run build      # tsc -> dist/  (also the typecheck)
 npm start          # node dist/server.js
-npx prisma migrate dev --config prisma7.config.ts     # apply/create migrations
-npx prisma generate --config prisma7.config.ts        # regenerate client into src/generated/prisma
+npx prisma migrate dev --config prisma7.config.ts --name <name>   # create/apply a migration
+npx prisma generate --config prisma7.config.ts        # regenerate client into src/generated/prisma (migrate dev no longer does this in Prisma 7)
 npx prisma db seed --config prisma7.config.ts         # runs prisma/seed.ts (idempotent)
 ```
 
@@ -37,24 +37,35 @@ npm run build      # tsc -b && vite build
 npm run lint       # oxlint
 ```
 
-No test runner is configured yet (`server/src/tests/` is a placeholder).
+Server tests (Vitest, run from `server/`):
+
+```bash
+npm test                                   # all tests
+npm run test:unit                          # pure domain tests, no DB
+npm run test:integration                   # real Postgres + Supertest
+npx vitest run src/tests/unit/assignmentRule.test.ts   # one file
+npx vitest run -t "exactly one succeeds"               # tests matching a name
+```
+
+Integration tests never use the dev database. `vitest.config.ts` points `DATABASE_URL` at `<dev db name>_test` (or `TEST_DATABASE_URL`), and `src/tests/globalSetup.ts` creates that database and applies migrations. Test files wipe their data first; `assertTestDatabase` refuses to do that to anything not named `*_test`.
 
 Env: copy `server/.env.example` to `server/.env` (validated by Zod in `server/src/config/env.ts`; server refuses to start if invalid). Client needs `VITE_API_BASE_URL` in `client/.env`. The super admin is created on server boot from `SUPER_ADMIN_*` env vars (`utils/seedAdmin.ts`, create-only).
 
 ## Server architecture
 
-Layers: `routes/` → `middleware/validate` → `controllers/` → `services/` → Prisma (`config/db.ts`). There is no `models/` folder: `prisma/schema.prisma` and the generated client (`src/generated/prisma`, gitignored) are the model layer.
+Layers: `routes/` → `middleware/validate` → `controllers/` → `services/` → Prisma (`config/db.ts`). Business rules that must be unit-testable live in `src/domain/` as pure functions (no Prisma or Express imports): services load data, call the domain function, and persist the result. There is no `models/` folder: `prisma/schema.prisma` and the generated client (`src/generated/prisma`, gitignored) are the model layer.
 
 - **Auth is fail-closed.** `app.ts` applies `authenticate` to the whole `/api` router before mounting any module, so new routes are protected automatically. The only public paths are an explicit `PUBLIC_PATHS` allowlist inside `middleware/auth.middleware.ts`. Role gating uses `requireRole(...)` from `middleware/role.middleware.ts`, applied at mount time in `app.ts`. `/health` lives outside `/api`.
 - **Errors**: throw the typed `AppError` subclasses from `utils/errors.ts` (`ValidationError` 400, `UnauthenticatedError` 401, `ForbiddenError` 403, `NotFoundError` 404, `ConflictError` / `InvalidTransitionError` 409). `middleware/error.middleware.ts` serialises them as `{ error: { code, message, details } }`.
 - **Validation**: Zod schemas in `utils/validators.ts` with `{ body, query, params }` shape, applied via `validate(schema)`. It returns `ValidatedRequestHandler<S>`, the same type controllers use, so `req.body`/`req.query`/`req.params` are inferred.
 - **List endpoints** follow the pattern in `GET /api/users`: DB-side filtering, search, offset pagination capped at 100, allowlisted sort fields, and a `{ data, meta }` response. Service params are typed via `z.infer<typeof schema.query>` rather than hand-written interfaces.
+- **Audit**: every state-changing write records an `AuditEvent` via `writeAudit(tx, …)` from `src/lib/audit.ts`, always with the same transaction client as the change (interactive `prisma.$transaction(async (tx) => …)`), never the global `prisma`.
 - DTO mappers (e.g. `toUserDto`) strip internal fields like `passwordHash`; never return raw Prisma rows.
 - Prisma logs queries in development (`config/db.ts`). This is how DB-side filtering and paging are checked.
 
 ### Data model notes
 
-Key models: `User`, `Vehicle`, `VehiclePosition` (current, PK = vehicleId), `VehiclePositionHistory` (append-only), `Request`, `Assignment` (self-relation `overriddenFromId` + `overrideReason` for overrides), `AuditEvent`. The migration `one_active_assignment_per_vehicle` is hand-written: it adds a partial unique index on `assignments("vehicleId") WHERE status='ACTIVE'`. That index is the concurrency guarantee against double-assigning a vehicle, so keep it in mind when writing assignment logic or new migrations.
+Key models: `User`, `Vehicle`, `VehiclePosition` (current, PK = vehicleId), `VehiclePositionHistory` (append-only), `Request`, `Assignment` (self-relation `overriddenFromId` + `overrideReason` for overrides), `AuditEvent`. The migration `one_active_assignment_per_vehicle` is hand-written: it adds a partial unique index on `assignments("vehicleId") WHERE status='ACTIVE'`. That index is the concurrency guarantee against double-assigning a vehicle: `assignRequest` translates its P2002 into a 409, and `src/tests/integration/assignConcurrency.test.ts` fails if the index is dropped. Request updates also guard on `version` (`updateMany … where: { version }`).
 
 ## Client architecture
 

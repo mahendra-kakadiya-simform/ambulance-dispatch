@@ -5,7 +5,9 @@ import { authenticate } from './middleware/auth.middleware.js';
 import { errorHandler } from './middleware/error.middleware.js';
 import { requireRole } from './middleware/role.middleware.js';
 import { authRouter } from './routes/auth.routes.js';
+import { requestsRouter } from './routes/requests.routes.js';
 import { usersRouter } from './routes/users.routes.js';
+import { vehiclesRouter } from './routes/vehicles.routes.js';
 
 export function createApp(): Express {
   const app = express();
@@ -28,6 +30,11 @@ export function createApp(): Express {
 
   apiRouter.use('/auth', authRouter);
   apiRouter.use('/users', requireRole('SUPER_ADMIN'), usersRouter);
+  // Any authenticated role may read vehicles; per-route role checks live in vehicles.routes.ts.
+  apiRouter.use('/vehicles', vehiclesRouter);
+  // Drivers get their own request through a dedicated, ownership-checked route (Day 9),
+  // never through this router.
+  apiRouter.use('/requests', requireRole('DISPATCHER', 'SUPER_ADMIN'), requestsRouter);
 
   app.use('/api', apiRouter);
 
