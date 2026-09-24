@@ -62,21 +62,6 @@ npm run test:unit           # pure rule and state-machine tests, no database
 npm run test:integration    # real Postgres + real HTTP; uses ambulance_dispatch_test, never your dev DB
 ```
 
-## Logins
-
-The super admin is whatever you put in `SUPER_ADMIN_EMAIL` / `SUPER_ADMIN_PASSWORD`.
-
-The seed (`npx prisma db seed --config prisma7.config.ts`) adds these, all with the password `Passw0rd!`:
-
-| Email | Role | Vehicle |
-|---|---|---|
-| `dispatcher@ambulance-dispatch.dev` (Priya Shah) | Dispatcher | — |
-| `driver.aman@ambulance-dispatch.dev` (Aman Patel) | Driver | AMB-01, available |
-| `driver.rohit@ambulance-dispatch.dev` (Rohit Mehta) | Driver | AMB-02, **out of service** |
-| `driver.sana@ambulance-dispatch.dev` (Sana Sheikh) | Driver | AMB-03, available |
-
-It also seeds two waiting requests in Ahmedabad built for the urgency demo (see [Technical decisions](#urgency-before-proximity-as-a-pure-rule-module)): **Ramesh Iyer** (ROUTINE, ~2 km from AMB-01) and **Fatima Sheikh** (CRITICAL, ~8 km from AMB-01). AMB-02 is closer to Fatima but out of service.
-
 ## Environment variables
 
 `server/.env` (validated with Zod at startup; the server refuses to start if any is missing or malformed):
