@@ -65,6 +65,7 @@ export interface Vehicle {
   status: VehicleStatus;
   driverId: string | null;
   driver: { id: string; name: string } | null;
+  onAssignment: boolean;
 }
 
 // One row of GET /api/vehicles/positions — a vehicle's current position only.
@@ -98,7 +99,8 @@ export interface Request {
   createdById: string;
   createdAt: string;
   updatedAt: string;
-  activeAssignment: ActiveAssignment | null;
+  // Latest ACTIVE assignment, or the COMPLETED one once the request has ARRIVED.
+  currentAssignment: CurrentAssignment | null;
 }
 
 // Returned by POST /api/requests/:id/assign — the decision plus the reasoning behind it.
@@ -117,10 +119,23 @@ export interface AssignResult {
   candidates: AssignmentCandidate[];
 }
 
-export interface ActiveAssignment {
+export interface CurrentAssignment {
   id: string;
+  status: AssignmentStatus;
   createdAt: string;
-  vehicle: { id: string; code: string; status: VehicleStatus };
+  // The driver currently linked to that vehicle, if any.
+  vehicle: { id: string; code: string; status: VehicleStatus; driver: { id: string; name: string } | null };
+}
+
+// One row of GET /api/requests/:id/history.
+export interface HistoryEntry {
+  id: string;
+  action: string;
+  fromValue: string | null;
+  toValue: string | null;
+  reason: string | null;
+  createdAt: string;
+  actor: { id: string; name: string; role: Role };
 }
 
 export interface AuditEvent {

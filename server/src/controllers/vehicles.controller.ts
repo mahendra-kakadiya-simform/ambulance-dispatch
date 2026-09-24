@@ -38,6 +38,14 @@ export const reportPosition: ValidatedRequestHandler<typeof reportPositionSchema
   res.json({ position });
 };
 
+export const getMyPosition = async (req: Request, res: Response): Promise<void> => {
+  if (!req.user) {
+    throw new UnauthenticatedError();
+  }
+  const result = await vehiclesService.getMyPosition(req.user.id);
+  res.json(result);
+};
+
 export const listPositions = async (_req: Request, res: Response): Promise<void> => {
   const positions = await vehiclesService.listCurrentPositions();
   res.json({ data: positions });

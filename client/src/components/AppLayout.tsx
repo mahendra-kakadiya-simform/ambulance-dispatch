@@ -14,6 +14,8 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAppDispatch, useAppSelector } from '../app/hooks';
 import { loggedOut } from '../features/auth/authSlice';
 import { Role } from '../types';
+import { ErrorBoundary } from './ErrorBoundary';
+import { GlobalSnackbar } from './GlobalSnackbar';
 
 const DRAWER_WIDTH = 220;
 
@@ -42,6 +44,8 @@ export function AppLayout() {
   function handleLogout() {
     dispatch(loggedOut());
     navigate('/login', { replace: true });
+    // The API cache is cleared by LoginPage before the next user's pages mount — not here,
+    // because resetting while this layout's query hooks are still mounted leaves them stuck.
   }
 
   return (
@@ -89,8 +93,12 @@ export function AppLayout() {
 
       <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
         <Toolbar />
-        <Outlet />
+        <ErrorBoundary key={location.pathname}>
+          <Outlet />
+        </ErrorBoundary>
       </Box>
+
+      <GlobalSnackbar />
     </Box>
   );
 }

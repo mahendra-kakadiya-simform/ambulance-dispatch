@@ -2,15 +2,29 @@ import type { z } from 'zod';
 import { prisma } from '../config/db.js';
 import { explainPick } from '../domain/assignmentRule.js';
 import { Prisma } from '../generated/prisma/client.js';
-import type { RequestState, Urgency, VehicleStatus } from '../generated/prisma/enums.js';
+import type { AssignmentStatus, RequestState, Role, Urgency, VehicleStatus } from '../generated/prisma/enums.js';
+import { assertTransition } from '../domain/stateMachine.js';
 import { writeAudit } from '../lib/audit.js';
-import { ConflictError, NotFoundError } from '../utils/errors.js';
-import type { createRequestSchema, listRequestsSchema } from '../utils/validators.js';
+import { ConflictError, ForbiddenError, InvalidTransitionError, NotFoundError, ValidationError } from '../utils/errors.js';
+import type {
+  createRequestSchema,
+  listRequestsSchema,
+  requestHistorySchema,
+  overrideAssignmentSchema,
+  transitionRequestSchema,
+} from '../utils/validators.js';
 
-export interface ActiveAssignmentDto {
+export interface Actor {
   id: string;
+  role: Role;
+}
+
+export interface CurrentAssignmentDto {
+  id: string;
+  status: AssignmentStatus;
   createdAt: Date;
-  vehicle: { id: string; code: string; status: VehicleStatus };
+  // driver is whoever is linked to the vehicle now (driver links are not historical).
+  vehicle: { id: string; code: string; status: VehicleStatus; driver: { id: string; name: string } | null };
 }
 
 export interface RequestDto {
@@ -26,19 +40,23 @@ export interface RequestDto {
   createdById: string;
   createdAt: Date;
   updatedAt: Date;
-  activeAssignment: ActiveAssignmentDto | null;
+  currentAssignment: CurrentAssignmentDto | null;
 }
 
-// At most one ACTIVE assignment exists per request at a time (older ones become
-// SUPERSEDED/COMPLETED), so `take: 1` loads exactly the current one.
+// A request's current assignment is its latest ACTIVE one, or the COMPLETED one once
+// it has ARRIVED. SUPERSEDED (overridden) and CANCELLED assignments are history only.
+const CURRENT_ASSIGNMENT_STATUSES: AssignmentStatus[] = ['ACTIVE', 'COMPLETED'];
+
 const requestInclude = {
   assignments: {
-    where: { status: 'ACTIVE' },
+    where: { status: { in: CURRENT_ASSIGNMENT_STATUSES } },
+    orderBy: { createdAt: 'desc' },
     take: 1,
     select: {
       id: true,
+      status: true,
       createdAt: true,
-      vehicle: { select: { id: true, code: true, status: true } },
+      vehicle: { select: { id: true, code: true, status: true, driver: { select: { id: true, name: true } } } },
     },
   },
 } satisfies Prisma.RequestInclude;
@@ -46,7 +64,7 @@ const requestInclude = {
 type RequestRecord = Prisma.RequestGetPayload<{ include: typeof requestInclude }>;
 
 function toRequestDto(request: RequestRecord): RequestDto {
-  const active = request.assignments[0];
+  const current = request.assignments[0];
   return {
     id: request.id,
     patientName: request.patientName,
@@ -60,7 +78,9 @@ function toRequestDto(request: RequestRecord): RequestDto {
     createdById: request.createdById,
     createdAt: request.createdAt,
     updatedAt: request.updatedAt,
-    activeAssignment: active ? { id: active.id, createdAt: active.createdAt, vehicle: active.vehicle } : null,
+    currentAssignment: current
+      ? { id: current.id, status: current.status, createdAt: current.createdAt, vehicle: current.vehicle }
+      : null,
   };
 }
 
@@ -96,12 +116,49 @@ export async function createRequest(actorId: string, input: CreateRequestInput):
   return toRequestDto(request);
 }
 
-export async function getRequest(id: string): Promise<RequestDto> {
+// Resource-level authorization for drivers: a DRIVER may only touch a request whose
+// current assignment is on the vehicle linked to them. The role check at the route only
+// says "drivers may call this endpoint"; this says "this driver may see this request".
+// A missing request and someone else's request get the same 403 with no request data,
+// so a driver cannot even probe which request IDs exist.
+const NO_ACCESS_MESSAGE = 'You do not have access to this request';
+
+async function assertDriverOwnsRequest(
+  db: Prisma.TransactionClient | typeof prisma,
+  requestId: string,
+  driverId: string,
+): Promise<void> {
+  const owned = await db.assignment.findFirst({
+    where: {
+      requestId,
+      status: { in: CURRENT_ASSIGNMENT_STATUSES },
+      vehicle: { driverId },
+    },
+    select: { id: true },
+  });
+  if (!owned) {
+    throw new ForbiddenError(NO_ACCESS_MESSAGE);
+  }
+}
+
+export async function getRequest(id: string, actor: Actor): Promise<RequestDto> {
+  if (actor.role === 'DRIVER') {
+    await assertDriverOwnsRequest(prisma, id, actor.id);
+  }
   const request = await prisma.request.findUnique({ where: { id }, include: requestInclude });
   if (!request) {
     throw new NotFoundError('Request not found');
   }
   return toRequestDto(request);
+}
+
+// The request currently assigned to this driver's vehicle, or null if there is none.
+export async function getDriverCurrentRequest(driverId: string): Promise<RequestDto | null> {
+  const assignment = await prisma.assignment.findFirst({
+    where: { status: 'ACTIVE', vehicle: { driverId } },
+    select: { request: { include: requestInclude } },
+  });
+  return assignment ? toRequestDto(assignment.request) : null;
 }
 
 type ListRequestsParams = z.infer<typeof listRequestsSchema.query>;
@@ -199,6 +256,7 @@ export async function assignRequest(requestId: string, actorId: string): Promise
       if (request.state !== 'REQUESTED') {
         throw new ConflictError(`Request is already ${request.state} and cannot be assigned`);
       }
+      assertTransition(request.state, 'ASSIGNED');
 
       // 2. Candidate vehicles: AVAILABLE, with a known current position, and not already
       //    on an ACTIVE assignment. This read is only a snapshot — another transaction can
@@ -301,4 +359,245 @@ export async function assignRequest(requestId: string, actorId: string): Promise
     }
     throw err;
   }
+}
+
+// ---- state transitions ----
+
+type TransitionInput = z.infer<typeof transitionRequestSchema.body>;
+
+function isUniqueViolation(err: unknown, constraint: string): boolean {
+  return (
+    err instanceof Prisma.PrismaClientKnownRequestError &&
+    err.code === 'P2002' &&
+    JSON.stringify(err.meta ?? {}).includes(constraint)
+  );
+}
+
+export async function transitionRequest(requestId: string, actor: Actor, input: TransitionInput): Promise<RequestDto> {
+  const { toState, version, reason } = input;
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      // Ownership is checked here in the service, inside the transaction, rather than in
+      // the route handler: every caller of transitionRequest gets it (a future route, a
+      // job, a test), and it is evaluated against the same snapshot the update uses.
+      if (actor.role === 'DRIVER') {
+        await assertDriverOwnsRequest(tx, requestId, actor.id);
+      }
+
+      const request = await tx.request.findUnique({ where: { id: requestId } });
+      if (!request) {
+        throw new NotFoundError('Request not found');
+      }
+
+      // Optimistic concurrency: the client must prove it saw the latest version.
+      if (request.version !== version) {
+        throw new ConflictError(
+          'This request was changed by someone else since you loaded it — refresh to see the latest state',
+          { currentVersion: request.version, currentState: request.state },
+        );
+      }
+
+      assertTransition(request.state, toState, reason);
+
+      // Assigning needs a vehicle, which only the assign endpoint chooses.
+      if (request.state === 'REQUESTED' && toState === 'ASSIGNED') {
+        throw new InvalidTransitionError('Use the assign action to assign a vehicle to this request');
+      }
+      if (toState === 'CANCELLED' && actor.role === 'DRIVER') {
+        throw new ForbiddenError('Only dispatch can cancel a request');
+      }
+
+      const assignment = await tx.assignment.findFirst({
+        where: { requestId, status: { in: CURRENT_ASSIGNMENT_STATUSES } },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!assignment && request.state !== 'REQUESTED') {
+        throw new ConflictError(`Request is ${request.state} but has no current assignment`);
+      }
+
+      const moved = await tx.request.updateMany({
+        where: { id: requestId, version },
+        data: { state: toState, version: { increment: 1 } },
+      });
+      if (moved.count !== 1) {
+        throw new ConflictError('This request was changed by someone else since you loaded it — refresh to see the latest state');
+      }
+
+      // Keep the assignment in step with the request.
+      if (assignment) {
+        if (toState === 'ARRIVED') {
+          await tx.assignment.update({ where: { id: assignment.id }, data: { status: 'COMPLETED' } });
+        } else if (request.state === 'ARRIVED' && toState === 'EN_ROUTE') {
+          // Re-opening a completed job puts the vehicle back on it; the partial unique
+          // index rejects this if the vehicle has been given another job since.
+          await tx.assignment.update({ where: { id: assignment.id }, data: { status: 'ACTIVE' } });
+        } else if (toState === 'CANCELLED') {
+          await tx.assignment.update({ where: { id: assignment.id }, data: { status: 'CANCELLED' } });
+        }
+      }
+
+      await writeAudit(tx, {
+        actorId: actor.id,
+        entityType: 'Request',
+        entityId: requestId,
+        action: 'STATE_CHANGED',
+        fromValue: request.state,
+        toValue: toState,
+        reason: reason?.trim() || null,
+      });
+
+      const updated = await tx.request.findUniqueOrThrow({ where: { id: requestId }, include: requestInclude });
+      return toRequestDto(updated);
+    });
+  } catch (err) {
+    if (isUniqueViolation(err, 'one_active_assignment_per_vehicle')) {
+      throw new ConflictError('That vehicle is already on another assignment, so this job cannot be reopened for it');
+    }
+    throw err;
+  }
+}
+
+// ---- override ----
+
+type OverrideInput = z.infer<typeof overrideAssignmentSchema.body>;
+
+export async function overrideAssignment(requestId: string, actorId: string, input: OverrideInput): Promise<RequestDto> {
+  const reason = input.reason.trim();
+  let targetCode: string | null = null;
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const request = await tx.request.findUnique({ where: { id: requestId } });
+      if (!request) {
+        throw new NotFoundError('Request not found');
+      }
+      if (request.state !== 'ASSIGNED') {
+        throw new ConflictError(`Only an ASSIGNED request can be overridden; this one is ${request.state}`);
+      }
+
+      const current = await tx.assignment.findFirst({
+        where: { requestId, status: 'ACTIVE' },
+        include: { vehicle: { select: { code: true } } },
+      });
+      if (!current) {
+        throw new ConflictError('Request has no active assignment to override');
+      }
+
+      const target = await tx.vehicle.findUnique({ where: { id: input.vehicleId } });
+      if (!target) {
+        throw new ValidationError('Validation failed', { vehicleId: ['Vehicle not found'] });
+      }
+      targetCode = target.code;
+      if (target.id === current.vehicleId) {
+        throw new ValidationError('Validation failed', { vehicleId: [`${target.code} is already assigned to this request`] });
+      }
+      if (target.status !== 'AVAILABLE') {
+        throw new ConflictError(`${target.code} is out of service`, { vehicleId: [`${target.code} is out of service`] });
+      }
+
+      // Old row first, new row second; the new row links back to the one it replaces.
+      await tx.assignment.update({ where: { id: current.id }, data: { status: 'SUPERSEDED' } });
+      // The partial unique index still guards the target vehicle: if it is on another
+      // ACTIVE assignment (or gets one concurrently), this insert fails with P2002.
+      await tx.assignment.create({
+        data: {
+          requestId,
+          vehicleId: target.id,
+          status: 'ACTIVE',
+          assignedById: actorId,
+          overriddenFromId: current.id,
+          overrideReason: reason,
+        },
+      });
+
+      // Bump the version so a driver screen still showing the old vehicle cannot act on it.
+      const moved = await tx.request.updateMany({
+        where: { id: requestId, version: request.version },
+        data: { version: { increment: 1 } },
+      });
+      if (moved.count !== 1) {
+        throw new ConflictError('This request was changed by someone else — refresh and try again');
+      }
+
+      await writeAudit(tx, {
+        actorId,
+        entityType: 'Request',
+        entityId: requestId,
+        action: 'ASSIGNMENT_OVERRIDDEN',
+        fromValue: current.vehicle.code,
+        toValue: target.code,
+        reason,
+      });
+
+      const updated = await tx.request.findUniqueOrThrow({ where: { id: requestId }, include: requestInclude });
+      return toRequestDto(updated);
+    });
+  } catch (err) {
+    if (isUniqueViolation(err, 'one_active_assignment_per_vehicle')) {
+      throw new ConflictError(`${targetCode} is already on another assignment — choose a different vehicle`, {
+        vehicleId: [`${targetCode} was just taken`],
+      });
+    }
+    throw err;
+  }
+}
+
+// ---- history ----
+
+export interface HistoryEntryDto {
+  id: string;
+  action: string;
+  fromValue: string | null;
+  toValue: string | null;
+  reason: string | null;
+  createdAt: Date;
+  actor: { id: string; name: string; role: Role };
+}
+
+interface HistoryResult {
+  data: HistoryEntryDto[];
+  meta: { page: number; pageSize: number; total: number; totalPages: number };
+}
+
+type HistoryParams = z.infer<typeof requestHistorySchema.query>;
+
+/** The request's full audit trail, oldest first. Drivers may only read their own request's. */
+export async function getRequestHistory(requestId: string, actor: Actor, params: HistoryParams): Promise<HistoryResult> {
+  if (actor.role === 'DRIVER') {
+    await assertDriverOwnsRequest(prisma, requestId, actor.id);
+  }
+  const exists = await prisma.request.findUnique({ where: { id: requestId }, select: { id: true } });
+  if (!exists) {
+    throw new NotFoundError('Request not found');
+  }
+
+  const { page, pageSize } = params;
+  const where: Prisma.AuditEventWhereInput = { entityType: 'Request', entityId: requestId };
+
+  const [total, events] = await prisma.$transaction([
+    prisma.auditEvent.count({ where }),
+    prisma.auditEvent.findMany({
+      where,
+      include: { actor: { select: { id: true, name: true, role: true } } },
+      // Served by the (entityType, entityId) index. id breaks ties between rows written
+      // in the same millisecond so pages never overlap or skip.
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+    }),
+  ]);
+
+  return {
+    data: events.map((e) => ({
+      id: e.id,
+      action: e.action,
+      fromValue: e.fromValue,
+      toValue: e.toValue,
+      reason: e.reason,
+      createdAt: e.createdAt,
+      actor: e.actor,
+    })),
+    meta: { page, pageSize, total, totalPages: total === 0 ? 0 : Math.ceil(total / pageSize) },
+  };
 }

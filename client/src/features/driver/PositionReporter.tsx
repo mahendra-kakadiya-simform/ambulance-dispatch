@@ -1,5 +1,6 @@
 import {
   Alert,
+  Box,
   Button,
   Card,
   CardContent,
@@ -13,7 +14,7 @@ import {
 } from '@mui/material';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { extractApiError } from '../../api/errorUtils';
-import { useReportPositionMutation } from '../../api/vehiclesApi';
+import { useGetMyPositionQuery, useReportPositionMutation } from '../../api/vehiclesApi';
 
 const REPORT_INTERVAL_MS = 10_000;
 
@@ -70,10 +71,28 @@ function parseManual(latitude: string, longitude: string): Coords | null {
 export function PositionReporter() {
   const [sharing, setSharing] = useState(false);
   const [source, setSource] = useState<Source>('gps');
-  const [manualLat, setManualLat] = useState('23.0225');
-  const [manualLng, setManualLng] = useState('72.5714');
-  const [lastSent, setLastSent] = useState<{ at: Date; coords: Coords } | null>(null);
+  const [manualLat, setManualLat] = useState('');
+  const [manualLng, setManualLng] = useState('');
   const [error, setError] = useState<{ message: string; gpsFailed: boolean } | null>(null);
+
+  // The last position saved on the server — whether it came from device location or manual
+  // entry — so it is shown after a refresh or a new login, not just after sending in this tab.
+  // reportPosition invalidates this query, so it also updates after every send.
+  const { data: myPosition, isLoading: positionLoading } = useGetMyPositionQuery();
+  const lastSaved = myPosition?.position ?? null;
+  const noVehicle = myPosition !== undefined && myPosition.vehicle === null;
+
+  // Pre-fill the manual fields from the saved position once, when it first arrives, so the
+  // driver starts from where they last were. Done during render (not in an effect), and
+  // only once, so later refetches never overwrite what the driver is typing.
+  const [prefilled, setPrefilled] = useState(false);
+  if (!prefilled && myPosition) {
+    setPrefilled(true);
+    if (myPosition.position) {
+      setManualLat(String(myPosition.position.latitude));
+      setManualLng(String(myPosition.position.longitude));
+    }
+  }
 
   const [reportPosition] = useReportPositionMutation();
 
@@ -111,7 +130,6 @@ export function PositionReporter() {
       }
 
       await reportPosition(coords).unwrap();
-      setLastSent({ at: new Date(), coords });
       setError(null);
     } catch (err) {
       setError({ message: extractApiError(err).message, gpsFailed: false });
@@ -134,9 +152,18 @@ export function PositionReporter() {
       <CardContent>
         <Stack spacing={2}>
           <Stack direction="row" sx={{ alignItems: 'center', justifyContent: 'space-between' }}>
-            <Typography variant="h6">Location sharing</Typography>
+            <Box>
+              <Typography variant="h6">Location sharing</Typography>
+              {myPosition?.vehicle && (
+                <Typography variant="caption" color="text.secondary">
+                  Vehicle {myPosition.vehicle.code}
+                </Typography>
+              )}
+            </Box>
             <FormControlLabel
-              control={<Switch checked={sharing} onChange={(e) => setSharing(e.target.checked)} />}
+              control={
+                <Switch checked={sharing} disabled={noVehicle} onChange={(e) => setSharing(e.target.checked)} />
+              }
               label="Share my location"
             />
           </Stack>
@@ -172,6 +199,10 @@ export function PositionReporter() {
             </Stack>
           )}
 
+          {noVehicle && (
+            <Alert severity="info">No vehicle is linked to your account yet. Ask an admin to link one.</Alert>
+          )}
+
           {error && (
             <Alert
               severity="warning"
@@ -189,9 +220,11 @@ export function PositionReporter() {
 
           <Typography variant="body2" color="text.secondary">
             {sharing ? `Sending every ${REPORT_INTERVAL_MS / 1000}s. ` : 'Not sharing. '}
-            {lastSent
-              ? `Last sent at ${lastSent.at.toLocaleTimeString()} (${lastSent.coords.latitude.toFixed(5)}, ${lastSent.coords.longitude.toFixed(5)})`
-              : 'Nothing sent yet.'}
+            {positionLoading
+              ? 'Loading last saved location…'
+              : lastSaved
+                ? `Last saved ${new Date(lastSaved.recordedAt).toLocaleString()} (${lastSaved.latitude.toFixed(5)}, ${lastSaved.longitude.toFixed(5)})`
+                : 'No location saved yet.'}
           </Typography>
         </Stack>
       </CardContent>

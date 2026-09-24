@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository. For setup, env vars, the API table and design rationale, see `README.md`.
 
 ## Working rules
 
@@ -53,9 +53,9 @@ Env: copy `server/.env.example` to `server/.env` (validated by Zod in `server/sr
 
 ## Server architecture
 
-Layers: `routes/` → `middleware/validate` → `controllers/` → `services/` → Prisma (`config/db.ts`). Business rules that must be unit-testable live in `src/domain/` as pure functions (no Prisma or Express imports): services load data, call the domain function, and persist the result. There is no `models/` folder: `prisma/schema.prisma` and the generated client (`src/generated/prisma`, gitignored) are the model layer.
+Layers: `routes/` → `middleware/validate` → `controllers/` → `services/` → Prisma (`config/db.ts`). Business rules that must be unit-testable live in `src/domain/` as pure functions (no Prisma or Express imports): `assignmentRule.ts` (urgency before proximity) and `stateMachine.ts` (the request lifecycle as a transition map; backward moves need a reason). Services load data, call the domain function, and persist the result. The client mirrors the transition map in `components/requestTransitions.ts` only to decide which buttons to show. There is no `models/` folder: `prisma/schema.prisma` and the generated client (`src/generated/prisma`, gitignored) are the model layer.
 
-- **Auth is fail-closed.** `app.ts` applies `authenticate` to the whole `/api` router before mounting any module, so new routes are protected automatically. The only public paths are an explicit `PUBLIC_PATHS` allowlist inside `middleware/auth.middleware.ts`. Role gating uses `requireRole(...)` from `middleware/role.middleware.ts`, applied at mount time in `app.ts`. `/health` lives outside `/api`.
+- **Auth is fail-closed.** `app.ts` applies `authenticate` to the whole `/api` router before mounting any module, so new routes are protected automatically. The only public paths are an explicit `PUBLIC_PATHS` allowlist inside `middleware/auth.middleware.ts`. Role gating uses `requireRole(...)` from `middleware/role.middleware.ts`, either at mount time in `app.ts` or per route (it is generic, so call it inline in a route chain). A role check is not an ownership check: drivers can reach `GET /api/requests/:id` and `PATCH /api/requests/:id/state`, and `assertDriverOwnsRequest` in `requests.service.ts` returns the same 403 for someone else's request and a missing one. `/health` lives outside `/api`.
 - **Errors**: throw the typed `AppError` subclasses from `utils/errors.ts` (`ValidationError` 400, `UnauthenticatedError` 401, `ForbiddenError` 403, `NotFoundError` 404, `ConflictError` / `InvalidTransitionError` 409). `middleware/error.middleware.ts` serialises them as `{ error: { code, message, details } }`.
 - **Validation**: Zod schemas in `utils/validators.ts` with `{ body, query, params }` shape, applied via `validate(schema)`. It returns `ValidatedRequestHandler<S>`, the same type controllers use, so `req.body`/`req.query`/`req.params` are inferred.
 - **List endpoints** follow the pattern in `GET /api/users`: DB-side filtering, search, offset pagination capped at 100, allowlisted sort fields, and a `{ data, meta }` response. Service params are typed via `z.infer<typeof schema.query>` rather than hand-written interfaces.
@@ -73,6 +73,8 @@ Key models: `User`, `Vehicle`, `VehiclePosition` (current, PK = vehicleId), `Veh
 - `features/auth/authSlice.ts` persists token and user to localStorage. `ProtectedRoute` revalidates with `/api/auth/me` on load → `AppLayout` (role-filtered nav) → `RoleRoute` (per-section role gate). `/` redirects by role (`features/auth/roleLandingPath.ts`).
 - Code is grouped by role under `features/admin`, `features/dispatcher` and `features/driver`.
 - Map form errors from the server with `api/errorUtils.ts::extractApiError()` (field-level validation errors and CONFLICTs mapped onto fields). Reuse it for every form.
+- Error handling: mutation callers show their own errors inline. `app/apiErrorListener.ts` reports failed *queries* (loads and polls) to `components/GlobalSnackbar.tsx`, and `components/ErrorBoundary.tsx` wraps each routed page (keyed by path). Don't add a second global handler for mutations.
+- The RTK Query cache survives logout/login (no page reload), so `LoginPage` calls `baseApi.util.resetApiState()` before storing the new credentials. Don't move that reset into logout or a listener: resetting while query hooks are mounted leaves them stuck loading.
 - Domain enums live in `types/index.ts` as `as const` objects plus DTO types. Extend that file instead of duplicating string literals.
 
 ## Toolchain gotchas

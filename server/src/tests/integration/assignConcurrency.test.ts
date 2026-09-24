@@ -7,8 +7,9 @@
  * resolves to that same vehicle, then fires both at once with Promise.allSettled.
  *
  * Resetting the database between runs:
- *   - Each run starts by deleting all rows from the test database (resetData below), so
- *     runs never see each other's data. It refuses to run against a non-*_test database.
+ *   - Each run starts by deleting its request/vehicle rows (resetRunData below), so runs
+ *     never see each other's data; the file starts from an empty database (resetDatabase
+ *     in ../helpers.ts, which refuses to run against a non-*_test database).
  *   - vitest's globalSetup applies any pending migrations before every suite run. It
  *     does not undo manual schema changes (a dropped index stays dropped).
  *   - To rebuild the test database from scratch:
@@ -22,22 +23,22 @@
  *   psql <test url> -c 'DELETE FROM assignments' \
  *     -c "CREATE UNIQUE INDEX one_active_assignment_per_vehicle ON assignments (\"vehicleId\") WHERE status = 'ACTIVE'"
  */
-import bcrypt from 'bcryptjs';
 import type { Server } from 'node:http';
 import request from 'supertest';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { createApp } from '../../app.js';
 import { prisma } from '../../config/db.js';
+import { createUser, login, resetDatabase } from '../helpers.js';
 import { assertTestDatabase } from '../testDatabase.js';
 
 const RUNS = 20;
-const PASSWORD = 'Passw0rd!';
 
 let server: Server;
 let token: string;
 let dispatcherId: string;
 
-async function resetData(): Promise<void> {
+// Clears everything except users, so the logged-in dispatcher survives between runs.
+async function resetRunData(): Promise<void> {
   assertTestDatabase(process.env['DATABASE_URL']);
   await prisma.$transaction([
     prisma.auditEvent.deleteMany(),
@@ -50,26 +51,12 @@ async function resetData(): Promise<void> {
 }
 
 beforeAll(async () => {
-  assertTestDatabase(process.env['DATABASE_URL']);
-  await resetData();
-  await prisma.user.deleteMany();
-
-  const dispatcher = await prisma.user.create({
-    data: {
-      name: 'Concurrency Dispatcher',
-      email: 'dispatcher@concurrency.test',
-      passwordHash: await bcrypt.hash(PASSWORD, 4),
-      role: 'DISPATCHER',
-    },
-  });
+  await resetDatabase();
+  const dispatcher = await createUser('DISPATCHER', 'dispatcher@concurrency.test');
   dispatcherId = dispatcher.id;
 
   server = createApp().listen(0);
-  const login = await request(server)
-    .post('/api/auth/login')
-    .send({ email: 'dispatcher@concurrency.test', password: PASSWORD });
-  expect(login.status).toBe(200);
-  token = login.body.token;
+  token = await login(server, dispatcher.email);
 });
 
 afterAll(async () => {
@@ -82,7 +69,7 @@ describe('two concurrent assignment attempts for the same vehicle', () => {
   let requestIds: [string, string];
 
   beforeEach(async () => {
-    await resetData();
+    await resetRunData();
 
     const vehicle = await prisma.vehicle.create({
       data: {

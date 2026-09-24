@@ -7,7 +7,7 @@ import { UsersPage } from './features/admin/UsersPage';
 import { VehiclesPage } from './features/admin/VehiclesPage';
 import { LoginPage } from './features/auth/LoginPage';
 import { roleLandingPath } from './features/auth/roleLandingPath';
-import { DriverPage } from './features/driver/DriverPage';
+import { MyRequestPage } from './features/driver/MyRequestPage';
 import { LivePositionsPage } from './features/dispatcher/LivePositionsPage';
 import { RequestsPage } from './features/dispatcher/RequestsPage';
 import { Role } from './types';
@@ -40,7 +40,7 @@ function App() {
           </Route>
 
           <Route element={<RoleRoute allow={[Role.DRIVER]} />}>
-            <Route path="/driver" element={<DriverPage />} />
+            <Route path="/driver" element={<MyRequestPage />} />
           </Route>
         </Route>
       </Route>

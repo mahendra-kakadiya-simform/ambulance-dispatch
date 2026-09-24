@@ -49,7 +49,7 @@ export function VehicleFormDialog({ open, vehicle, onClose, onSuccess }: Vehicle
   const [formError, setFormError] = useState<string | null>(null);
 
   // Only DRIVER-role users are offered; the server still rejects anyone else with a 400.
-  const { data: driversData } = useListUsersQuery(
+  const { data: driversData, isLoading: driversLoading } = useListUsersQuery(
     { role: Role.DRIVER, isActive: true, pageSize: 100, sort: 'name', order: 'asc' },
     { skip: !open },
   );
@@ -154,6 +154,11 @@ export function VehicleFormDialog({ open, vehicle, onClose, onSuccess }: Vehicle
                 <MenuItem value="">
                   <em>No driver</em>
                 </MenuItem>
+                {driversLoading && (
+                  <MenuItem value="__loading" disabled>
+                    Loading drivers…
+                  </MenuItem>
+                )}
                 {(driversData?.data ?? []).map((driver) => {
                   const otherCode = linkedElsewhere.get(driver.id);
                   return (

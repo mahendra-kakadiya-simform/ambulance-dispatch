@@ -11,10 +11,13 @@ export interface VehicleDto {
   status: VehicleStatus;
   driverId: string | null;
   driver: { id: string; name: string } | null;
+  // True while the vehicle is on an ACTIVE assignment (so it cannot take another job).
+  onAssignment: boolean;
 }
 
 const vehicleInclude = {
   driver: { select: { id: true, name: true } },
+  _count: { select: { assignments: { where: { status: 'ACTIVE' } } } },
 } satisfies Prisma.VehicleInclude;
 
 type VehicleRecord = Prisma.VehicleGetPayload<{ include: typeof vehicleInclude }>;
@@ -26,6 +29,7 @@ function toVehicleDto(vehicle: VehicleRecord): VehicleDto {
     status: vehicle.status,
     driverId: vehicle.driverId,
     driver: vehicle.driver ? { id: vehicle.driver.id, name: vehicle.driver.name } : null,
+    onAssignment: vehicle._count.assignments > 0,
   };
 }
 
@@ -188,6 +192,35 @@ export async function reportPosition(
   ]);
 
   return position;
+}
+
+export interface MyPositionDto {
+  vehicle: { id: string; code: string } | null;
+  position: PositionDto | null;
+}
+
+// The authenticated driver's vehicle and its last saved position (from the current-position
+// table), so the driver screen can show it after a reload. Both are null when no vehicle is
+// linked; position is null when the vehicle has never reported.
+export async function getMyPosition(driverId: string): Promise<MyPositionDto> {
+  const vehicle = await prisma.vehicle.findUnique({
+    where: { driverId },
+    select: { id: true, code: true, position: true },
+  });
+  if (!vehicle) {
+    return { vehicle: null, position: null };
+  }
+  return {
+    vehicle: { id: vehicle.id, code: vehicle.code },
+    position: vehicle.position
+      ? {
+          vehicleId: vehicle.position.vehicleId,
+          latitude: vehicle.position.latitude,
+          longitude: vehicle.position.longitude,
+          recordedAt: vehicle.position.recordedAt,
+        }
+      : null,
+  };
 }
 
 export interface LivePositionDto {

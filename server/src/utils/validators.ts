@@ -176,3 +176,35 @@ export const assignRequestSchema = {
     id: z.uuid(),
   }),
 };
+
+export const transitionRequestSchema = {
+  params: z.object({
+    id: z.uuid(),
+  }),
+  body: z.object({
+    toState: z.enum(REQUEST_STATES),
+    version: z.number().int().positive(),
+    reason: z.string().trim().min(1).optional(),
+  }),
+};
+
+export const overrideAssignmentSchema = {
+  params: z.object({
+    id: z.uuid(),
+  }),
+  body: z.object({
+    vehicleId: z.uuid(),
+    // trim() runs before min(1), so an all-whitespace reason is rejected here.
+    reason: z.string('A reason is required').trim().min(1, 'A reason is required'),
+  }),
+};
+
+export const requestHistorySchema = {
+  params: z.object({
+    id: z.uuid(),
+  }),
+  query: z.object({
+    page: z.coerce.number().int().positive().default(1),
+    pageSize: z.coerce.number().int().positive().max(100).default(20),
+  }),
+};

@@ -12,6 +12,7 @@ import { type FormEvent, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { extractApiError } from '../../api/errorUtils';
 import { useLoginMutation } from '../../api/authApi';
+import { baseApi } from '../../api/baseApi';
 import { useAppDispatch } from '../../app/hooks';
 import { credentialsSet } from './authSlice';
 import { roleLandingPath } from './roleLandingPath';
@@ -52,6 +53,12 @@ export function LoginPage() {
 
     try {
       const result = await login({ email, password }).unwrap();
+      // RTK Query's cache lives in the Redux store and survives logout/login (no page
+      // reload), so without this the new user would see the previous user's cached data
+      // (saved location, current job, lists). It must run here, before navigating: the
+      // login page has no cached-data hooks mounted, and hooks that are mounted when the
+      // cache is reset can get stuck loading.
+      dispatch(baseApi.util.resetApiState());
       dispatch(credentialsSet(result));
       navigate(roleLandingPath(result.user.role), { replace: true });
     } catch (err) {

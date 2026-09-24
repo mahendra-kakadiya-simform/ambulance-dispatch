@@ -6,6 +6,9 @@ import type {
   createRequestSchema,
   getRequestSchema,
   listRequestsSchema,
+  overrideAssignmentSchema,
+  requestHistorySchema,
+  transitionRequestSchema,
 } from '../utils/validators.js';
 
 export const list: ValidatedRequestHandler<typeof listRequestsSchema> = async (req, res) => {
@@ -14,7 +17,10 @@ export const list: ValidatedRequestHandler<typeof listRequestsSchema> = async (r
 };
 
 export const getById: ValidatedRequestHandler<typeof getRequestSchema> = async (req, res) => {
-  const request = await requestsService.getRequest(req.params.id);
+  if (!req.user) {
+    throw new UnauthenticatedError();
+  }
+  const request = await requestsService.getRequest(req.params.id, req.user);
   res.json({ request });
 };
 
@@ -32,4 +38,28 @@ export const assign: ValidatedRequestHandler<typeof assignRequestSchema> = async
   }
   const result = await requestsService.assignRequest(req.params.id, req.user.id);
   res.status(201).json(result);
+};
+
+export const transition: ValidatedRequestHandler<typeof transitionRequestSchema> = async (req, res) => {
+  if (!req.user) {
+    throw new UnauthenticatedError();
+  }
+  const request = await requestsService.transitionRequest(req.params.id, req.user, req.body);
+  res.json({ request });
+};
+
+export const override: ValidatedRequestHandler<typeof overrideAssignmentSchema> = async (req, res) => {
+  if (!req.user) {
+    throw new UnauthenticatedError();
+  }
+  const request = await requestsService.overrideAssignment(req.params.id, req.user.id, req.body);
+  res.json({ request });
+};
+
+export const history: ValidatedRequestHandler<typeof requestHistorySchema> = async (req, res) => {
+  if (!req.user) {
+    throw new UnauthenticatedError();
+  }
+  const result = await requestsService.getRequestHistory(req.params.id, req.user, req.query);
+  res.json(result);
 };

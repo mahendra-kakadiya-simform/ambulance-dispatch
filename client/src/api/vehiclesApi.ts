@@ -25,6 +25,11 @@ export interface UpdateVehicleRequest {
   driverId?: string | null;
 }
 
+export interface MyPositionResponse {
+  vehicle: { id: string; code: string } | null;
+  position: VehiclePosition | null;
+}
+
 export interface ReportPositionRequest {
   latitude: number;
   longitude: number;
@@ -63,9 +68,16 @@ export const vehiclesApi = baseApi.injectEndpoints({
       providesTags: ['Position'],
     }),
 
+    // The driver's vehicle and its last saved position — read on load so it survives a refresh.
+    getMyPosition: builder.query<MyPositionResponse, void>({
+      query: () => '/api/vehicles/me/position',
+      providesTags: [{ type: 'Position', id: 'MINE' }],
+    }),
+
     // No vehicle id in the request: the server resolves it from the driver's token.
     reportPosition: builder.mutation<{ position: VehiclePosition }, ReportPositionRequest>({
       query: (body) => ({ url: '/api/vehicles/me/position', method: 'POST', body }),
+      invalidatesTags: [{ type: 'Position', id: 'MINE' }],
     }),
   }),
 });
@@ -75,5 +87,6 @@ export const {
   useCreateVehicleMutation,
   useUpdateVehicleMutation,
   useGetPositionsQuery,
+  useGetMyPositionQuery,
   useReportPositionMutation,
 } = vehiclesApi;

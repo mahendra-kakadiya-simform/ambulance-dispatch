@@ -10,6 +10,7 @@ import { Provider } from 'react-redux';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App.tsx';
 import { store } from './app/store.ts';
+import { ErrorBoundary } from './components/ErrorBoundary.tsx';
 import { theme } from './theme.ts';
 
 createRoot(document.getElementById('root')!).render(
@@ -17,9 +18,11 @@ createRoot(document.getElementById('root')!).render(
     <Provider store={store}>
       <ThemeProvider theme={theme}>
         <CssBaseline />
-        <BrowserRouter>
-          <App />
-        </BrowserRouter>
+        <ErrorBoundary>
+          <BrowserRouter>
+            <App />
+          </BrowserRouter>
+        </ErrorBoundary>
       </ThemeProvider>
     </Provider>
   </StrictMode>,

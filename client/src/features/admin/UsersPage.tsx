@@ -25,6 +25,7 @@ import {
   Typography,
 } from '@mui/material';
 import { type MouseEvent, useState } from 'react';
+import { extractApiError } from '../../api/errorUtils';
 import { useListUsersQuery, useUpdateUserMutation } from '../../api/usersApi';
 import { ConfirmDialog } from '../../components/ConfirmDialog';
 import { useAppSelector } from '../../app/hooks';
@@ -125,8 +126,13 @@ export function UsersPage() {
     if (!confirmTargetUser) {
       return;
     }
-    await updateUser({ id: confirmTargetUser.id, isActive: !confirmTargetUser.isActive }).unwrap();
-    setSnackbarMessage(confirmTargetUser.isActive ? 'User deactivated' : 'User activated');
+    try {
+      await updateUser({ id: confirmTargetUser.id, isActive: !confirmTargetUser.isActive }).unwrap();
+      setSnackbarMessage(confirmTargetUser.isActive ? 'User deactivated' : 'User activated');
+    } catch (err) {
+      // e.g. 409 "Cannot deactivate a driver whose vehicle has an active assignment"
+      setSnackbarMessage(extractApiError(err).message);
+    }
     setConfirmOpen(false);
     setConfirmTargetUser(null);
   }

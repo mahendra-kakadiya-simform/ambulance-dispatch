@@ -14,6 +14,7 @@ export const vehiclesRouter = Router();
 
 // Literal paths are registered before /:id so "positions" and "me" are never parsed as ids.
 vehiclesRouter.get('/positions', requireRole('DISPATCHER', 'SUPER_ADMIN'), vehiclesController.listPositions);
+vehiclesRouter.get('/me/position', requireRole('DRIVER'), vehiclesController.getMyPosition);
 vehiclesRouter.post('/me/position', requireRole('DRIVER'), validate(reportPositionSchema), vehiclesController.reportPosition);
 
 vehiclesRouter.get('/', validate(listVehiclesSchema), vehiclesController.list);

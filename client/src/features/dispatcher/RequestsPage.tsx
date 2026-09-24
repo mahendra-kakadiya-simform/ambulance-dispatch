@@ -31,11 +31,13 @@ import { RequestStateChip, UrgencyChip } from '../../components/RequestChips';
 import { REQUEST_STATE_META, URGENCY_META } from '../../components/requestMeta';
 import { type AssignResult, type Request, RequestState, Urgency } from '../../types';
 import { AssignmentExplanationDialog } from './AssignmentExplanationDialog';
+import { HistoryDialog } from './HistoryDialog';
 import { NewRequestDialog } from './NewRequestDialog';
+import { OverrideDialog } from './OverrideDialog';
 
 const POLLING_INTERVAL_MS = 10_000;
 const SKELETON_ROWS = 5;
-const COLUMNS = 7;
+const COLUMNS = 8;
 
 const ALL_STATES = Object.values(RequestState);
 const ALL_URGENCIES = Object.values(Urgency);
@@ -61,6 +63,8 @@ export function RequestsPage() {
   const [lastAssignment, setLastAssignment] = useState<AssignResult | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
   const [explanation, setExplanation] = useState<AssignResult | null>(null);
+  const [overrideTarget, setOverrideTarget] = useState<Request | null>(null);
+  const [historyTarget, setHistoryTarget] = useState<Request | null>(null);
 
   // Filtering, sorting and paging all happen server-side; this page only sends parameters.
   const { data, isLoading, error, refetch } = useListRequestsQuery(
@@ -205,6 +209,7 @@ export function RequestsPage() {
               <TableCell>{sortLabel('urgency', 'Urgency')}</TableCell>
               <TableCell>{sortLabel('state', 'State')}</TableCell>
               <TableCell>Vehicle</TableCell>
+              <TableCell>Driver</TableCell>
               <TableCell>{sortLabel('createdAt', 'Created')}</TableCell>
               <TableCell align="right" />
             </TableRow>
@@ -241,7 +246,12 @@ export function RequestsPage() {
                 <TableCell>
                   <RequestStateChip state={request.state} />
                 </TableCell>
-                <TableCell>{request.activeAssignment?.vehicle.code ?? '—'}</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>{request.currentAssignment?.vehicle.code ?? '—'}</TableCell>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                  {request.currentAssignment
+                    ? (request.currentAssignment.vehicle.driver?.name ?? 'No driver linked')
+                    : '—'}
+                </TableCell>
                 <TableCell title={new Date(request.createdAt).toLocaleString()}>
                   {new Date(request.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                   <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
@@ -260,6 +270,14 @@ export function RequestsPage() {
                       Assign
                     </Button>
                   )}
+                  {request.state === RequestState.ASSIGNED && (
+                    <Button size="small" color="inherit" variant="outlined" onClick={() => setOverrideTarget(request)}>
+                      Override
+                    </Button>
+                  )}
+                  <Button size="small" onClick={() => setHistoryTarget(request)} sx={{ ml: 1 }}>
+                    History
+                  </Button>
                 </TableCell>
               </TableRow>
             ))}
@@ -323,6 +341,10 @@ export function RequestsPage() {
       </Snackbar>
 
       <AssignmentExplanationDialog result={explanation} onClose={() => setExplanation(null)} />
+
+      <OverrideDialog request={overrideTarget} onClose={() => setOverrideTarget(null)} onSuccess={setSnackbarMessage} />
+
+      <HistoryDialog request={historyTarget} onClose={() => setHistoryTarget(null)} />
     </Box>
   );
 }

@@ -36,6 +36,8 @@ enum AssignmentStatus {
   ACTIVE
   COMPLETED
   SUPERSEDED
+  // The request was cancelled while assigned; the vehicle is released.
+  CANCELLED
 }
 
 model User {
